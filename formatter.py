@@ -1,83 +1,125 @@
 
-def small_caps(text):
-    normal = "abcdefghijklmnopqrstuvwxyz"
-    small = "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡxʏᴢ"
+import re
+from html import escape
 
-    return str(text).translate(
-        str.maketrans(normal, small)
-    )
+
+SMALL_CAPS_MAP = str.maketrans({
+    "a": "ᴀ", "b": "ʙ", "c": "ᴄ", "d": "ᴅ",
+    "e": "ᴇ", "f": "ғ", "g": "ɢ", "h": "ʜ",
+    "i": "ɪ", "j": "ᴊ", "k": "ᴋ", "l": "ʟ",
+    "m": "ᴍ", "n": "ɴ", "o": "ᴏ", "p": "ᴘ",
+    "q": "ǫ", "r": "ʀ", "s": "s", "t": "ᴛ",
+    "u": "ᴜ", "v": "ᴠ", "w": "ᴡ", "x": "x",
+    "y": "ʏ", "z": "ᴢ"
+})
+
+
+def small_caps(text):
+    """Convert normal text to Unicode small caps."""
+    if not text:
+        return ""
+    return str(text).translate(SMALL_CAPS_MAP)
+
+
+def clean_text(value, default="N/A"):
+    """Clean empty or missing values."""
+    if value is None:
+        return default
+
+    if isinstance(value, list):
+        value = ", ".join(str(x) for x in value if x)
+
+    value = str(value).strip()
+    return value if value else default
+
+
+def get_director_name(directors):
+    """Convert director list into readable text."""
+    if isinstance(directors, list):
+        names = [
+            str(item).strip()
+            for item in directors
+            if item
+        ]
+        return ", ".join(names) if names else "N/A"
+
+    return clean_text(directors)
 
 
 def create_caption(movie, details, directors):
+    """Create a compact premium movie caption."""
 
-    title = details.get("title") or movie.get("title") or "N/A"
+    title = clean_text(
+        details.get("title") or movie.get("title")
+    )
 
-    release = details.get("release_date") or ""
-    year = release[:4] if release else "N/A"
+    release_date = clean_text(
+        details.get("release_date")
+        or movie.get("release_date"),
+        "N/A"
+    )
 
-    genres = details.get("genres") or []
-    genre_text = ", ".join(genres) if genres else "N/A"
+    year = (
+        release_date[:4]
+        if len(release_date) >= 4
+        else "N/A"
+    )
 
-    language = details.get("language") or "N/A"
+    language = clean_text(
+        details.get("language")
+        or movie.get("language"),
+        "N/A"
+    ).upper()
 
-    rating = details.get("rating")
-    rating_text = f"{rating:.1f}/10" if rating is not None else "N/A"
+    genres = clean_text(
+        details.get("genres")
+        or movie.get("genres"),
+        "N/A"
+    )
+
+    rating = clean_text(
+        details.get("rating")
+        or movie.get("rating"),
+        "N/A"
+    )
+
+    director = get_director_name(directors)
 
     runtime = details.get("runtime")
-    runtime_text = f"{runtime} min" if runtime else "N/A"
 
-    director_text = ", ".join(directors) if directors else "N/A"
+    if runtime:
+        runtime_text = f"{runtime} MIN"
+    else:
+        runtime_text = "N/A"
 
-    story = (
-        details.get("overview")
-        or movie.get("overview")
-        or "N/A"
-    )
+    # Main caption
+    lines = [
+        f"🎬 {small_caps(title)} ({year}) 🍿",
+        "",
+        f"⭐ {small_caps('Rating')}: {rating}/10",
+        f"🎭 {small_caps('Genres')}: {small_caps(genres)}",
+        f"🌐 {small_caps('Language')}: {small_caps(language)}",
+        f"📅 {small_caps('Release')}: {year}",
+        f"🎬 {small_caps('Director')}: {small_caps(director)}",
+        f"⏳ {small_caps('Runtime')}: {runtime_text}",
+        "",
+        f"👑 {small_caps('Powered By')} @RudraMoviez",
+        "",
+        f"📌 {small_caps('Data & Images')}: TMDB"
+    ]
 
-    imdb_id = details.get("imdb_id")
+    caption = "\n".join(lines)
 
-    imdb_link = (
-        f"https://www.imdb.com/title/{imdb_id}/"
-        if imdb_id else "N/A"
-    )
+    # Telegram photo caption limit safety
+    if len(caption) > 1000:
+        caption = caption[:997] + "..."
 
-    caption = f"""
-🎬 ʀᴍ ᴍᴏᴠɪᴇꜱ • ᴇxᴄʟᴜꜱɪᴠᴇ ᴅʀᴏᴘ 🍿
-
-🎥 ᴛɪᴛʟᴇ : {title} ({year})
-
-🌐 ʟᴀɴɢᴜᴀɢᴇ : {language}
-
-🎭 ɢᴇɴʀᴇ : {genre_text}
-
-⭐ ᴛᴍᴅʙ ʀᴀᴛɪɴɢ : {rating_text}
-
-🎬 ᴅɪʀᴇᴄᴛᴏʀ : {director_text}
-
-⏳ ʀᴜɴᴛɪᴍᴇ : {runtime_text}
-
-📝 ꜱᴛᴏʀʏ :
-{story}
-
-🔗 ɪᴍᴅʙ : {imdb_link}
-
-👑 ᴘᴏᴡᴇʀᴇᴅ ʙʏ @ʀᴜᴅʀᴀᴍᴏᴠɪᴇᴢ
-
-📌 ᴅᴀᴛᴀ & ɪᴍᴀɢᴇꜱ: ᴛᴍᴅʙ
-"""
-
-    return small_caps(caption)
+    return caption
 
 
 def create_cast_message(cast):
-
-    if not cast:
-        return "👥 ᴄᴀꜱᴛ ɪɴꜰᴏʀᴍᴀᴛɪᴏɴ ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ."
-
-    names = "\n".join(
-        f"• {name}" for name in cast
-    )
-
-    return small_caps(
-        f"👥 ꜰᴜʟʟ ᴄᴀꜱᴛ ʟɪꜱᴛ\n\n{names}"
-    )
+    """
+    Cast posting disabled.
+    Kept for compatibility with older main.py imports.
+    """
+    return ""
