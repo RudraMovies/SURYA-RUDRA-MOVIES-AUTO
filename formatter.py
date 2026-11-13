@@ -1,8 +1,4 @@
 
-import re
-from html import escape
-
-
 SMALL_CAPS_MAP = str.maketrans({
     "a": "ᴀ", "b": "ʙ", "c": "ᴄ", "d": "ᴅ",
     "e": "ᴇ", "f": "ғ", "g": "ɢ", "h": "ʜ",
@@ -15,39 +11,22 @@ SMALL_CAPS_MAP = str.maketrans({
 
 
 def small_caps(text):
-    """Convert normal text to Unicode small caps."""
     if not text:
         return ""
-    return str(text).translate(SMALL_CAPS_MAP)
+    return str(text).lower().translate(SMALL_CAPS_MAP)
 
 
 def clean_text(value, default="N/A"):
-    """Clean empty or missing values."""
-    if value is None:
+    if value is None or value == "":
         return default
 
     if isinstance(value, list):
         value = ", ".join(str(x) for x in value if x)
 
-    value = str(value).strip()
-    return value if value else default
-
-
-def get_director_name(directors):
-    """Convert director list into readable text."""
-    if isinstance(directors, list):
-        names = [
-            str(item).strip()
-            for item in directors
-            if item
-        ]
-        return ", ".join(names) if names else "N/A"
-
-    return clean_text(directors)
+    return str(value).strip() or default
 
 
 def create_caption(movie, details, directors):
-    """Create a compact premium movie caption."""
 
     title = clean_text(
         details.get("title") or movie.get("title")
@@ -59,67 +38,46 @@ def create_caption(movie, details, directors):
         "N/A"
     )
 
-    year = (
-        release_date[:4]
-        if len(release_date) >= 4
-        else "N/A"
-    )
+    year = release_date[:4] if len(release_date) >= 4 else "N/A"
 
     language = clean_text(
-        details.get("language")
-        or movie.get("language"),
-        "N/A"
-    ).upper()
+        details.get("language") or movie.get("language")
+    )
 
     genres = clean_text(
-        details.get("genres")
-        or movie.get("genres"),
-        "N/A"
+        details.get("genres") or movie.get("genres")
     )
 
-    rating = clean_text(
-        details.get("rating")
-        or movie.get("rating"),
-        "N/A"
-    )
+    rating = details.get("rating") or movie.get("rating")
 
-    director = get_director_name(directors)
+    try:
+        rating = f"{float(rating):.1f}"
+    except (TypeError, ValueError):
+        rating = "N/A"
+
+    if isinstance(directors, list):
+        director = ", ".join(str(x) for x in directors if x)
+    else:
+        director = clean_text(directors)
 
     runtime = details.get("runtime")
+    runtime = f"{runtime} min" if runtime else "N/A"
 
-    if runtime:
-        runtime_text = f"{runtime} MIN"
-    else:
-        runtime_text = "N/A"
-
-    # Main caption
     lines = [
         f"🎬 {small_caps(title)} ({year}) 🍿",
         "",
-        f"⭐ {small_caps('Rating')}: {rating}/10",
-        f"🎭 {small_caps('Genres')}: {small_caps(genres)}",
-        f"🌐 {small_caps('Language')}: {small_caps(language)}",
-        f"📅 {small_caps('Release')}: {year}",
-        f"🎬 {small_caps('Director')}: {small_caps(director)}",
-        f"⏳ {small_caps('Runtime')}: {runtime_text}",
+        f"⭐ {small_caps('Rating')} : {rating}/10",
+        f"🎭 {small_caps('Genres')} : {small_caps(genres)}",
+        f"🌐 {small_caps('Language')} : {small_caps(language)}",
+        f"📅 {small_caps('Release')} : {year}",
+        f"🎬 {small_caps('Director')} : {small_caps(director)}",
+        f"⏳ {small_caps('Runtime')} : {small_caps(runtime)}",
         "",
-        f"👑 {small_caps('Powered By')} @RudraMoviez",
-        "",
-        f"📌 {small_caps('Data & Images')}: TMDB"
+        f"👑 {small_caps('Powered By')} @RudraMoviez"
     ]
 
-    caption = "\n".join(lines)
-
-    # Telegram photo caption limit safety
-    if len(caption) > 1000:
-        caption = caption[:997] + "..."
-
-    return caption
+    return "\n".join(lines)
 
 
 def create_cast_message(cast):
-    """
-    Cast posting disabled.
-    Kept for compatibility with older main.py imports.
-    """
     return ""
