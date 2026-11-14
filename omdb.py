@@ -1,45 +1,61 @@
-
 import os
 import aiohttp
 
-OMDB_API_KEY = os.getenv("OMDB_API_KEY")
+OMDB_API_KEY = os.getenv("OMDB_API_KEY", "")
 
-BASE_URL = "https://www.omdbapi.com/"
-
-
-async def get_imdb_details(movie_name, year=None):
+async def search_omdb(movie_name):
 
     if not OMDB_API_KEY:
         return None
 
+    url = "https://www.omdbapi.com/"
+
     params = {
         "apikey": OMDB_API_KEY,
         "t": movie_name,
-        "plot": "full"
+        "plot": "short"
     }
 
-    if year:
-        params["y"] = year
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url,
+                params=params,
+                timeout=15
+            ) as response:
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(BASE_URL, params=params) as response:
+                data = await response.json()
 
-            if response.status != 200:
-                return None
+                if data.get("Response") != "True":
+                    return None
 
-            data = await response.json()
+                return data
 
-            if data.get("Response") != "True":
-                return None
+    except Exception:
+        return None
 
-            return {
-                "imdb_id": data.get("imdbID"),
-                "imdb_rating": data.get("imdbRating"),
-                "imdb_votes": data.get("imdbVotes"),
-                "runtime": data.get("Runtime"),
-                "director": data.get("Director"),
-                "genre": data.get("Genre"),
-                "language": data.get("Language"),
-                "country": data.get("Country"),
-                "plot": data.get("Plot")
-            }
+
+def convert_omdb(data):
+
+    if not data:
+        return None
+
+    return {
+        "title": data.get("Title", "UNKNOWN"),
+        "release_date": data.get("Released", ""),
+        "rating": data.get("imdbRating"),
+        "genres": [
+            {"name": genre.strip()}
+            for genre in data.get("Genre", "").split(",")
+            if genre.strip()
+        ],
+        "language": data.get("Language", "N/A"),
+        "runtime": int(
+            data.get("Runtime", "0").split()[0]
+        ) if data.get("Runtime", "").split()
+        and data.get("Runtime", "").split()[0].isdigit()
+        else None,
+        "poster": data.get("Poster"),
+        "director": data.get("Director", "N/A"),
+        "imdb_id": data.get("imdbID")
+    }
