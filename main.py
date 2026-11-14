@@ -9,7 +9,6 @@ import aiohttp
 from aiohttp import web
 
 from pyrogram import Client, filters, idle
-from pyrogram.enums import ParseMode
 
 from config import (
     API_ID,
@@ -31,14 +30,20 @@ from omdb import search_omdb, convert_omdb
 
 
 # ==========================================
-# SURYA RUDRA MOVIES
+# SURYA RUDRA MOVIES SETTINGS
 # ==========================================
 
 BOT_NAME = "SURYA RUDRA MOVIES"
 POWERED_BY = "POWERED BY SURYA"
 
 WELCOME_IMAGE = os.getenv("WELCOME_IMAGE", "").strip()
+
 DATA_FILE = Path("bot_data.json")
+
+
+# ==========================================
+# LOGGING
+# ==========================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,50 +52,17 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+# ==========================================
+# PYROGRAM CLIENT
+# ==========================================
+
 app = Client(
     "surya_rudra_movies",
     api_id=API_ID,
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
-
-
-# ==========================================
-# DATA
-# ==========================================
-
-def load_data():
-    if DATA_FILE.exists():
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as file:
-                return json.load(file)
-        except Exception:
-            pass
-
-    return {
-        "total_searches": 0,
-        "total_posts": 0,
-        "auto_post": True,
-        "posted_movies": []
-    }
-
-
-data = load_data()
-
-
-def save_data():
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as file:
-            json.dump(data, file, indent=4)
-    except Exception as error:
-        logger.error("DATA SAVE FAILED: %s", error)
-
-
-def is_owner(user_id):
-    try:
-        return int(user_id) == int(OWNER_ID)
-    except Exception:
-        return False
 
 
 # ==========================================
@@ -115,60 +87,65 @@ def sc(text):
 
 
 # ==========================================
-# CHANNEL POSTING
+# DATA STORAGE
 # ==========================================
 
-async def send_channel_post(caption, photo=None):
-    """
-    Uses Telegram Bot API.
-    Does NOT use Pyrogram get_dialogs().
-    """
+def load_data():
 
-    base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+    default = {
+        "total_searches": 0,
+        "total_posts": 0,
+        "auto_post": True,
+        "posted_movies": []
+    }
 
-    async with aiohttp.ClientSession() as session:
+    if DATA_FILE.exists():
 
-        if photo:
-            url = f"{base_url}/sendPhoto"
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as file:
+                saved = json.load(file)
 
-            payload = {
-                "chat_id": str(CHANNEL_ID),
-                "photo": photo,
-                "caption": caption
-            }
+            default.update(saved)
 
-        else:
-            url = f"{base_url}/sendMessage"
+        except Exception as error:
+            logger.error("DATA LOAD ERROR: %s", error)
 
-            payload = {
-                "chat_id": str(CHANNEL_ID),
-                "text": caption
-            }
+    return default
 
-        async with session.post(
-            url,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=45)
-        ) as response:
 
-            result = await response.json()
+data = load_data()
 
-            if not result.get("ok"):
-                logger.error("CHANNEL POST FAILED: %s", result)
-                raise RuntimeError(result.get("description", "Telegram API error"))
 
-            return result
+def save_data():
+
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=4)
+
+    except Exception as error:
+        logger.error("DATA SAVE ERROR: %s", error)
+
+
+def is_owner(user_id):
+
+    try:
+        return int(user_id) == int(OWNER_ID)
+
+    except Exception:
+        return False
 
 
 # ==========================================
-# MOVIE HELPERS
+# VALUE HELPER
 # ==========================================
 
 def get_value(item, *keys, default="N/A"):
+
     if not isinstance(item, dict):
         return default
 
     for key in keys:
+
         value = item.get(key)
 
         if value not in (None, "", "N/A"):
@@ -177,19 +154,74 @@ def get_value(item, *keys, default="N/A"):
     return default
 
 
+# ==========================================
+# TELEGRAM CHANNEL POSTING
+# ==========================================
+
+async def send_channel_post(caption, photo=None):
+
+    base_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+    if photo:
+
+        url = f"{base_url}/sendPhoto"
+
+        payload = {
+            "chat_id": str(CHANNEL_ID),
+            "photo": photo,
+            "caption": caption
+        }
+
+    else:
+
+        url = f"{base_url}/sendMessage"
+
+        payload = {
+            "chat_id": str(CHANNEL_ID),
+            "text": caption
+        }
+
+    timeout = aiohttp.ClientTimeout(total=45)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+
+        async with session.post(url, json=payload) as response:
+
+            result = await response.json()
+
+            if not result.get("ok"):
+
+                logger.error(
+                    "CHANNEL POST FAILED: %s",
+                    result
+                )
+
+                raise RuntimeError(
+                    result.get("description", "Telegram API error")
+                )
+
+            return result
+
+
+# ==========================================
+# TMDB + OMDB MOVIE INFORMATION
+# ==========================================
+
 async def get_movie_information(movie_name):
 
     movie = None
     details = None
-    poster = None
+
     imdb_rating = "N/A"
     imdb_id = "N/A"
 
-    # TMDB FIRST
+    # TMDB SEARCH
     try:
+
         results = await search_movie(movie_name)
 
         if results:
+
             movie = results[0] if isinstance(results, list) else results
 
             movie_id = get_value(
@@ -200,25 +232,27 @@ async def get_movie_information(movie_name):
             )
 
             if movie_id:
+
                 details = await get_movie_details(movie_id)
 
-                if not details:
-                    details = movie
-
-            else:
+            if not details:
                 details = movie
 
     except Exception as error:
-        logger.warning("TMDB SEARCH ERROR: %s", error)
 
-    # OMDB FALLBACK / IMDb DETAILS
+        logger.exception("TMDB SEARCH ERROR: %s", error)
+
+    # OMDB SEARCH
     try:
+
         omdb_result = await search_omdb(movie_name)
 
         if omdb_result:
+
             omdb_details = convert_omdb(omdb_result)
 
             if omdb_details:
+
                 imdb_rating = get_value(
                     omdb_details,
                     "rating",
@@ -231,22 +265,30 @@ async def get_movie_information(movie_name):
                 )
 
                 if not details:
+
                     details = omdb_details
                     movie = omdb_details
 
     except Exception as error:
-        logger.warning("OMDB SEARCH ERROR: %s", error)
+
+        logger.exception("OMDB SEARCH ERROR: %s", error)
 
     if not details:
         return None
 
     # POSTER
+    poster = None
+
     try:
+
         poster = get_movie_image_url(details)
-    except Exception:
-        poster = None
+
+    except Exception as error:
+
+        logger.warning("POSTER ERROR: %s", error)
 
     if not poster:
+
         poster = get_value(
             details,
             "poster",
@@ -258,49 +300,71 @@ async def get_movie_information(movie_name):
     director = "N/A"
 
     try:
-        if movie:
-            movie_id = get_value(
-                movie,
-                "id",
-                "movie_id",
-                default=None
-            )
 
-            if movie_id:
-                director = await get_movie_director(movie_id)
+        movie_id = get_value(
+            movie,
+            "id",
+            "movie_id",
+            default=None
+        )
 
-    except Exception:
-        pass
+        if movie_id:
+
+            director = await get_movie_director(movie_id)
+
+    except Exception as error:
+
+        logger.warning("DIRECTOR ERROR: %s", error)
 
     if isinstance(director, dict):
-        director = get_value(director, "name")
+
+        director = get_value(
+            director,
+            "name"
+        )
 
     return {
-        "title": get_value(details, "title", "name"),
+        "title": get_value(
+            details,
+            "title",
+            "name"
+        ),
+
         "release": get_value(
             details,
             "release_date",
             "year"
         ),
+
         "rating": get_value(
             details,
             "vote_average",
             "rating"
         ),
+
         "imdb_rating": imdb_rating,
+
         "imdb_id": imdb_id,
-        "genres": get_value(details, "genres"),
+
+        "genres": get_value(
+            details,
+            "genres"
+        ),
+
         "language": get_value(
             details,
             "original_language",
             "language"
         ),
+
         "runtime": get_value(
             details,
             "runtime",
             "duration"
         ),
+
         "director": director,
+
         "poster": poster
     }
 
@@ -316,20 +380,27 @@ def build_caption(movie):
         f"━━━━━━━━━━━━━━━━━━\n\n"
 
         f"📅 {sc('Release')}: {movie['release']}\n"
+
         f"⭐ {sc('TMDB Rating')}: {movie['rating']}\n"
+
         f"⭐ {sc('IMDb Rating')}: {movie['imdb_rating']}\n"
+
         f"🎭 {sc('Genres')}: {movie['genres']}\n"
+
         f"🌐 {sc('Language')}: {movie['language']}\n"
+
         f"⏱ {sc('Runtime')}: {movie['runtime']}\n"
+
         f"🎥 {sc('Director')}: {movie['director']}\n\n"
 
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"✨ {sc(POWERED_BY)}"
+
+        f"👑 {sc(POWERED_BY)}"
     )
 
 
 # ==========================================
-# START
+# START COMMAND
 # ==========================================
 
 @app.on_message(filters.command("start") & filters.private)
@@ -337,30 +408,42 @@ async def start_command(client, message):
 
     welcome_text = (
         f"👑 {sc('Welcome To')} {sc(BOT_NAME)}\n\n"
+
         f"🎬 {sc('Your Movie Information Assistant')}\n\n"
+
         f"🔎 {sc('Search Movies')}\n"
+
         f"⭐ {sc('Get Movie Ratings')}\n"
+
         f"🎭 {sc('Get Movie Details')}\n\n"
+
         f"📌 {sc('Use /movie Movie Name')}\n\n"
+
         f"✨ {sc(POWERED_BY)}"
     )
 
     try:
+
         if WELCOME_IMAGE.startswith("https://"):
+
             await message.reply_photo(
                 photo=WELCOME_IMAGE,
                 caption=welcome_text
             )
+
         else:
+
             await message.reply_text(welcome_text)
 
     except Exception as error:
-        logger.error("WELCOME ERROR: %s", error)
+
+        logger.exception("WELCOME ERROR")
+
         await message.reply_text(welcome_text)
 
 
 # ==========================================
-# HELP
+# HELP COMMAND
 # ==========================================
 
 @app.on_message(filters.command("help") & filters.private)
@@ -369,14 +452,23 @@ async def help_command(client, message):
     text = (
         f"📚 {sc('BOT COMMANDS')}\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
+
         f"🎬 /movie Movie Name\n"
+
         f"🏠 /start\n"
+
         f"📚 /help\n"
+
         f"ℹ️ /about\n\n"
+
         f"👑 {sc('ADMIN COMMANDS')}\n"
+
         f"/stats\n"
+
         f"/autopost on\n"
+
         f"/autopost off\n\n"
+
         f"✨ {sc(POWERED_BY)}"
     )
 
@@ -384,7 +476,7 @@ async def help_command(client, message):
 
 
 # ==========================================
-# ABOUT
+# ABOUT COMMAND
 # ==========================================
 
 @app.on_message(filters.command("about") & filters.private)
@@ -393,10 +485,15 @@ async def about_command(client, message):
     text = (
         f"👑 {sc(BOT_NAME)}\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
+
         f"🎬 {sc('Movie Information Bot')}\n"
+
         f"⭐ {sc('TMDB and IMDb Information')}\n"
+
         f"⚡ {sc('Fast Movie Search')}\n\n"
+
         f"✨ {sc(POWERED_BY)}\n\n"
+
         f"Movie metadata provided by TMDB. "
         f"This product uses the TMDB API but is not endorsed or certified by TMDB."
     )
@@ -412,11 +509,15 @@ async def about_command(client, message):
 async def autopost_command(client, message):
 
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply_text("⛔ Owner only.")
+
+        return await message.reply_text(
+            "⛔ Owner only."
+        )
 
     args = message.text.split(maxsplit=1)
 
     if len(args) < 2:
+
         return await message.reply_text(
             "Use /autopost on or /autopost off"
         )
@@ -424,12 +525,15 @@ async def autopost_command(client, message):
     choice = args[1].lower().strip()
 
     if choice == "on":
+
         data["auto_post"] = True
 
     elif choice == "off":
+
         data["auto_post"] = False
 
     else:
+
         return await message.reply_text(
             "Use /autopost on or /autopost off"
         )
@@ -442,22 +546,30 @@ async def autopost_command(client, message):
 
 
 # ==========================================
-# STATS
+# STATS COMMAND
 # ==========================================
 
 @app.on_message(filters.command("stats") & filters.private)
 async def stats_command(client, message):
 
     if not message.from_user or not is_owner(message.from_user.id):
-        return await message.reply_text("⛔ Owner only.")
+
+        return await message.reply_text(
+            "⛔ Owner only."
+        )
 
     text = (
         f"📊 {sc('BOT STATISTICS')}\n"
         f"━━━━━━━━━━━━━━━━━━\n\n"
+
         f"🔎 Searches: {data['total_searches']}\n"
+
         f"📤 Posts: {data['total_posts']}\n"
+
         f"⚙️ Auto Post: {data['auto_post']}\n"
+
         f"🎬 Saved Movies: {len(data['posted_movies'])}\n\n"
+
         f"✨ {sc(POWERED_BY)}"
     )
 
@@ -465,21 +577,27 @@ async def stats_command(client, message):
 
 
 # ==========================================
-# MOVIE SEARCH
+# MOVIE SEARCH COMMAND
 # ==========================================
 
 @app.on_message(filters.command("movie") & filters.private)
 async def movie_command(client, message):
 
     if len(message.command) < 2:
+
         return await message.reply_text(
             "🎬 Use: /movie Movie Name"
         )
 
-    movie_name = message.text.split(maxsplit=1)[1].strip()
+    movie_name = message.text.split(
+        maxsplit=1
+    )[1].strip()
 
     if len(movie_name) > 150:
-        return await message.reply_text("Movie name is too long.")
+
+        return await message.reply_text(
+            "Movie name is too long."
+        )
 
     status = await message.reply_text(
         f"🔎 {sc('Searching Movie...')}"
@@ -490,6 +608,7 @@ async def movie_command(client, message):
         movie = await get_movie_information(movie_name)
 
         if not movie:
+
             return await status.edit_text(
                 f"❌ {sc('Movie Not Found')}\n\n"
                 f"Try another movie name."
@@ -499,9 +618,10 @@ async def movie_command(client, message):
         save_data()
 
         caption = build_caption(movie)
+
         poster = movie["poster"]
 
-        # AUTO POST TO CHANNEL
+        # AUTO POST ENABLED
         if data.get("auto_post", True):
 
             movie_key = (
@@ -518,35 +638,46 @@ async def movie_command(client, message):
                 )
 
                 data["posted_movies"].append(movie_key)
+
                 data["total_posts"] += 1
+
                 save_data()
 
             await status.edit_text(
                 f"✅ {sc('Movie Found')}\n\n"
+
                 f"🎬 {movie['title']}\n\n"
+
                 f"📢 {sc('Channel Post Successful')}\n\n"
+
                 f"✨ {sc(POWERED_BY)}"
             )
 
         else:
 
             if poster:
+
                 await message.reply_photo(
                     photo=poster,
                     caption=caption
                 )
+
             else:
+
                 await message.reply_text(caption)
 
             await status.delete()
 
     except Exception as error:
 
-        logger.exception("MOVIE SEARCH FAILED")
+        logger.exception(
+            "MOVIE SEARCH FAILED: %s",
+            error
+        )
 
         await status.edit_text(
             f"❌ {sc('Something Went Wrong')}\n\n"
-            f"Please try again later."
+            f"Please check server logs."
         )
 
 
@@ -555,6 +686,7 @@ async def movie_command(client, message):
 # ==========================================
 
 async def health(request):
+
     return web.json_response({
         "status": "online",
         "bot": BOT_NAME,
@@ -565,10 +697,13 @@ async def health(request):
 async def start_health_server():
 
     server = web.Application()
+
     server.router.add_get("/", health)
+
     server.router.add_get("/health", health)
 
     runner = web.AppRunner(server)
+
     await runner.setup()
 
     site = web.TCPSite(
@@ -579,7 +714,10 @@ async def start_health_server():
 
     await site.start()
 
-    logger.info("HEALTH SERVER RUNNING ON PORT %s", PORT)
+    logger.info(
+        "HEALTH SERVER RUNNING ON PORT %s",
+        PORT
+    )
 
     return runner
 
@@ -594,29 +732,34 @@ async def main():
 
     try:
 
-        logger.info("%s STARTING", BOT_NAME)
+        logger.info(
+            "%s STARTING",
+            BOT_NAME
+        )
 
         runner = await start_health_server()
 
-        await app.start()
-
-        logger.info("BOT STARTED SUCCESSFULLY")
+        logger.info(
+            "BOT STARTED SUCCESSFULLY"
+        )
 
         await idle()
 
-    except Exception:
-        logger.exception("BOT START ERROR")
-
     finally:
 
-        if app.is_connected:
-            await app.stop()
-
         if runner:
+
             await runner.cleanup()
 
-        logger.info("BOT STOPPED")
+        logger.info(
+            "HEALTH SERVER STOPPED"
+        )
 
+
+# ==========================================
+# RUN BOT
+# ==========================================
 
 if __name__ == "__main__":
-    asyncio.run(main())
+
+    app.run(main())
