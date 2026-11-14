@@ -44,7 +44,7 @@ logger.info("SURYA RUDRA MOVIES STARTING")
 
 
 # =====================================
-# BOT
+# PYROGRAM BOT
 # =====================================
 
 app = Client(
@@ -104,16 +104,16 @@ def start_health_server():
 
 
 # =====================================
-# 16:9 POSTER CONVERSION
+# 16:9 LANDSCAPE IMAGE CONVERSION
 # =====================================
 
-async def create_16_9_poster(poster_url):
+async def create_16_9_image(image_url):
 
-    timeout = ClientTimeout(total=45)
+    timeout = ClientTimeout(total=60)
 
     async with ClientSession(timeout=timeout) as session:
 
-        async with session.get(poster_url) as response:
+        async with session.get(image_url) as response:
 
             response.raise_for_status()
             image_data = await response.read()
@@ -122,50 +122,62 @@ async def create_16_9_poster(poster_url):
         io.BytesIO(image_data)
     ).convert("RGB")
 
-    width, height = 1280, 720
+    width = 1280
+    height = 720
 
-    # Blurred landscape background
-    background = ImageOps.fit(
-        original,
-        (width, height),
-        method=Image.Resampling.LANCZOS
-    )
+    # Landscape images fill the 16:9 frame.
+    # Portrait fallback images remain fully visible.
+    if original.width / original.height >= 1.65:
 
-    background = background.filter(
-        ImageFilter.GaussianBlur(30)
-    )
+        final_image = ImageOps.fit(
+            original,
+            (width, height),
+            method=Image.Resampling.LANCZOS
+        )
 
-    # Dark cinematic background
-    dark_layer = Image.new(
-        "RGB",
-        (width, height),
-        (0, 0, 0)
-    )
+    else:
 
-    background = Image.blend(
-        background,
-        dark_layer,
-        0.35
-    )
+        background = ImageOps.fit(
+            original,
+            (width, height),
+            method=Image.Resampling.LANCZOS
+        )
 
-    # Complete original poster remains visible
-    foreground = ImageOps.contain(
-        original,
-        (width, height),
-        method=Image.Resampling.LANCZOS
-    )
+        background = background.filter(
+            ImageFilter.GaussianBlur(30)
+        )
 
-    x = (width - foreground.width) // 2
-    y = (height - foreground.height) // 2
+        dark_layer = Image.new(
+            "RGB",
+            (width, height),
+            (0, 0, 0)
+        )
 
-    background.paste(
-        foreground,
-        (x, y)
-    )
+        background = Image.blend(
+            background,
+            dark_layer,
+            0.35
+        )
+
+        foreground = ImageOps.contain(
+            original,
+            (width, height),
+            method=Image.Resampling.LANCZOS
+        )
+
+        x = (width - foreground.width) // 2
+        y = (height - foreground.height) // 2
+
+        background.paste(
+            foreground,
+            (x, y)
+        )
+
+        final_image = background
 
     output = io.BytesIO()
 
-    background.save(
+    final_image.save(
         output,
         format="JPEG",
         quality=90,
@@ -209,12 +221,14 @@ def build_movie_caption(movie, details, directors):
     genres = details.get("genres") or []
 
     if isinstance(genres, list):
+
         genre_text = ", ".join(
             str(item.get("name", ""))
             if isinstance(item, dict)
             else str(item)
             for item in genres
         )
+
     else:
         genre_text = str(genres)
 
@@ -233,9 +247,11 @@ def build_movie_caption(movie, details, directors):
     )
 
     if isinstance(directors, list):
+
         director_text = ", ".join(
             str(name) for name in directors
         )
+
     else:
         director_text = str(directors or "N/A")
 
@@ -251,8 +267,9 @@ def build_movie_caption(movie, details, directors):
         f"👑 POWERED BY @RudraMoviez"
     )
 
-    # Telegram photo caption limit: 1024 characters
-    caption = caption[:1000]
+    # Telegram photo caption limit
+    if len(caption) > 1000:
+        caption = caption[:997] + "..."
 
     return small_caps(caption)
 
@@ -261,16 +278,16 @@ def build_movie_caption(movie, details, directors):
 # TELEGRAM CHANNEL POST
 # =====================================
 
-async def post_movie_to_channel(caption, poster_url):
+async def post_movie_to_channel(caption, image_url):
 
     if not CHANNEL_ID:
         raise ValueError("CHANNEL_ID is missing")
 
-    if not poster_url:
-        raise ValueError("Movie poster not available")
+    if not image_url:
+        raise ValueError("Movie image not available")
 
-    poster_bytes = await create_16_9_poster(
-        poster_url
+    image_bytes = await create_16_9_image(
+        image_url
     )
 
     form = FormData()
@@ -282,8 +299,8 @@ async def post_movie_to_channel(caption, poster_url):
 
     form.add_field(
         "photo",
-        poster_bytes,
-        filename="rudra_poster_16_9.jpg",
+        image_bytes,
+        filename="rudra_landscape_16_9.jpg",
         content_type="image/jpeg"
     )
 
@@ -319,7 +336,7 @@ async def post_movie_to_channel(caption, poster_url):
                 )
 
     logger.info(
-        "Movie details and 16:9 poster posted as ONE message"
+        "ONE POST: Movie details + landscape image uploaded"
     )
 
 
@@ -336,7 +353,7 @@ async def start_command(client, message):
         "👑 SURYA RUDRA MOVIES\n\n"
         "🎬 WELCOME!\n\n"
         "🔎 SEND A MOVIE NAME.\n\n"
-        "📌 USE /credits FOR DATA ATTRIBUTION."
+        "📌 USE /credits FOR TMDB ATTRIBUTION."
     )
 
 
@@ -353,7 +370,7 @@ async def credits_command(client, message):
         "TMDB ATTRIBUTION\n\n"
         "This product uses the TMDB API "
         "but is not endorsed or certified by TMDB.\n\n"
-        "Official TMDB logo and attribution guidelines:",
+        "Official logo and attribution guidelines:",
         reply_markup=InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(
@@ -422,7 +439,7 @@ async def movie_search(client, message):
 
             return
 
-        # Get movie details
+        # Get details
         details = await get_movie_details(
             movie_id
         )
@@ -435,7 +452,7 @@ async def movie_search(client, message):
 
             return
 
-        # Director only - no cast or story
+        # Director only
         directors = await get_movie_director(
             movie_id
         )
@@ -446,42 +463,50 @@ async def movie_search(client, message):
             directors
         )
 
-        # Poster
-        poster_path = (
-            details.get("poster")
-            or movie.get("poster")
+        # Prefer landscape backdrop
+        image_path = (
+            details.get("backdrop")
+            or movie.get("backdrop")
         )
 
-        if not poster_path:
+        # Fallback to portrait poster
+        if not image_path:
+
+            image_path = (
+                details.get("poster")
+                or movie.get("poster")
+            )
+
+        if not image_path:
 
             await status.edit_text(
-                "❌ POSTER NOT AVAILABLE."
+                "❌ MOVIE IMAGE NOT AVAILABLE."
             )
 
             return
 
-        if str(poster_path).startswith("https://"):
+        if str(image_path).startswith("https://"):
 
-            poster_url = poster_path
+            image_url = image_path
 
         else:
 
-            poster_url = get_poster_url(
-                poster_path
+            image_url = get_poster_url(
+                image_path
             )
 
-        if not poster_url:
+        if not image_url:
 
             await status.edit_text(
-                "❌ POSTER URL NOT AVAILABLE."
+                "❌ IMAGE URL NOT AVAILABLE."
             )
 
             return
 
-        # One post: caption above 16:9 poster
+        # One Telegram post
         await post_movie_to_channel(
             caption,
-            poster_url
+            image_url
         )
 
         await status.edit_text(
