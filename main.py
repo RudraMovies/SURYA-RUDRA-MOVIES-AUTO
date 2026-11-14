@@ -8,6 +8,7 @@ from aiohttp import web, ClientSession, ClientTimeout, FormData
 from PIL import Image, ImageOps, ImageFilter
 
 from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from config import (
     API_ID,
@@ -43,7 +44,7 @@ logger.info("SURYA RUDRA MOVIES STARTING")
 
 
 # =====================================
-# PYROGRAM BOT
+# BOT
 # =====================================
 
 app = Client(
@@ -96,12 +97,10 @@ def start_health_server():
     def thread_target():
         asyncio.run(run_server())
 
-    thread = threading.Thread(
+    threading.Thread(
         target=thread_target,
         daemon=True
-    )
-
-    thread.start()
+    ).start()
 
 
 # =====================================
@@ -117,17 +116,15 @@ async def create_16_9_poster(poster_url):
         async with session.get(poster_url) as response:
 
             response.raise_for_status()
-
             image_data = await response.read()
 
     original = Image.open(
         io.BytesIO(image_data)
     ).convert("RGB")
 
-    width = 1280
-    height = 720
+    width, height = 1280, 720
 
-    # Create blurred landscape background
+    # Blurred landscape background
     background = ImageOps.fit(
         original,
         (width, height),
@@ -151,7 +148,7 @@ async def create_16_9_poster(poster_url):
         0.35
     )
 
-    # Keep complete original poster visible
+    # Complete original poster remains visible
     foreground = ImageOps.contain(
         original,
         (width, height),
@@ -181,7 +178,7 @@ async def create_16_9_poster(poster_url):
 
 
 # =====================================
-# SMALL CAPS CAPTION
+# MOVIE CAPTION
 # =====================================
 
 def build_movie_caption(movie, details, directors):
@@ -251,11 +248,10 @@ def build_movie_caption(movie, details, directors):
         f"📅 RELEASE : {release_year}\n"
         f"🎬 DIRECTOR : {director_text}\n"
         f"⏳ RUNTIME : {runtime_text}\n\n"
-        f"👑 POWERED BY @RudraMoviez\n\n"
-        f"📌 DATA & IMAGES: TMDB"
+        f"👑 POWERED BY @RudraMoviez"
     )
 
-    # Telegram photo caption limit is 1024 characters.
+    # Telegram photo caption limit: 1024 characters
     caption = caption[:1000]
 
     return small_caps(caption)
@@ -273,7 +269,6 @@ async def post_movie_to_channel(caption, poster_url):
     if not poster_url:
         raise ValueError("Movie poster not available")
 
-    # Convert poster to 16:9
     poster_bytes = await create_16_9_poster(
         poster_url
     )
@@ -340,7 +335,33 @@ async def start_command(client, message):
     await message.reply_text(
         "👑 SURYA RUDRA MOVIES\n\n"
         "🎬 WELCOME!\n\n"
-        "🔎 SEND A MOVIE NAME."
+        "🔎 SEND A MOVIE NAME.\n\n"
+        "📌 USE /credits FOR DATA ATTRIBUTION."
+    )
+
+
+# =====================================
+# CREDITS COMMAND
+# =====================================
+
+@app.on_message(
+    filters.private & filters.command("credits")
+)
+async def credits_command(client, message):
+
+    await message.reply_text(
+        "TMDB ATTRIBUTION\n\n"
+        "This product uses the TMDB API "
+        "but is not endorsed or certified by TMDB.\n\n"
+        "Official TMDB logo and attribution guidelines:",
+        reply_markup=InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "TMDB LOGO & ATTRIBUTION",
+                    url="https://www.themoviedb.org/about/logos-attribution"
+                )
+            ]
+        ])
     )
 
 
@@ -351,7 +372,7 @@ async def start_command(client, message):
 @app.on_message(
     filters.private
     & filters.text
-    & ~filters.command(["start"])
+    & ~filters.command(["start", "credits"])
 )
 async def movie_search(client, message):
 
@@ -361,7 +382,6 @@ async def movie_search(client, message):
         else 0
     )
 
-    # Owner restriction
     if OWNER_ID and int(OWNER_ID) != int(user_id):
 
         await message.reply_text(
@@ -381,7 +401,7 @@ async def movie_search(client, message):
 
     try:
 
-        # Search movie
+        # Search TMDB
         movie = await search_movie(movie_name)
 
         if not movie:
@@ -402,7 +422,7 @@ async def movie_search(client, message):
 
             return
 
-        # Fetch movie details
+        # Get movie details
         details = await get_movie_details(
             movie_id
         )
@@ -415,19 +435,18 @@ async def movie_search(client, message):
 
             return
 
-        # Director only. No cast or story.
+        # Director only - no cast or story
         directors = await get_movie_director(
             movie_id
         )
 
-        # Build compact caption
         caption = build_movie_caption(
             movie,
             details,
             directors
         )
 
-        # Get poster path
+        # Poster
         poster_path = (
             details.get("poster")
             or movie.get("poster")
@@ -459,7 +478,7 @@ async def movie_search(client, message):
 
             return
 
-        # Send one message with caption above photo
+        # One post: caption above 16:9 poster
         await post_movie_to_channel(
             caption,
             poster_url
