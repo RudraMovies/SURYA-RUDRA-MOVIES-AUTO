@@ -1,14 +1,18 @@
 
 import asyncio
-import io
 import logging
 import threading
+import os
+import html
 
-from aiohttp import web, ClientSession, ClientTimeout, FormData
-from PIL import Image, ImageOps, ImageFilter
-
+from aiohttp import web
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.enums import ParseMode
+from pyrogram.errors import (
+    PeerIdInvalid,
+    ChatWriteForbidden,
+    ChatAdminRequired
+)
 
 from config import (
     API_ID,
@@ -23,29 +27,28 @@ from tmdb import (
     search_movie,
     get_movie_details,
     get_movie_director,
-    get_poster_url
+    get_movie_image_url
 )
 
-from formatter import small_caps
 
-
-# =====================================
+# ==========================================
 # LOGGING
-# =====================================
+# ==========================================
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 logger = logging.getLogger(__name__)
 
-logger.info("SURYA RUDRA MOVIES STARTING")
 
+# ==========================================
+# BOT SETTINGS
+# ==========================================
 
-# =====================================
-# PYROGRAM BOT
-# =====================================
+BOT_NAME = "SURYA RUDRA MOVIES"
+POWERED_BY = "@RudraMoviez"
 
 app = Client(
     "surya_rudra_movies",
@@ -55,150 +58,37 @@ app = Client(
 )
 
 
-# =====================================
-# HEALTH SERVER
-# =====================================
+# ==========================================
+# SMALL CAPS CONVERTER
+# ==========================================
 
-async def health(request):
-    return web.json_response({
-        "status": "online",
-        "bot": "SURYA RUDRA MOVIES"
-    })
-
-
-def start_health_server():
-
-    async def run_server():
-
-        server = web.Application()
-
-        server.router.add_get("/", health)
-        server.router.add_get("/health", health)
-
-        runner = web.AppRunner(server)
-        await runner.setup()
-
-        site = web.TCPSite(
-            runner,
-            "0.0.0.0",
-            int(PORT)
-        )
-
-        await site.start()
-
-        logger.info(
-            "Health server running on port %s",
-            PORT
-        )
-
-        while True:
-            await asyncio.sleep(3600)
-
-    def thread_target():
-        asyncio.run(run_server())
-
-    threading.Thread(
-        target=thread_target,
-        daemon=True
-    ).start()
+SMALL_CAPS_MAP = str.maketrans({
+    "a": "ᴀ", "b": "ʙ", "c": "ᴄ",
+    "d": "ᴅ", "e": "ᴇ", "f": "ꜰ",
+    "g": "ɢ", "h": "ʜ", "i": "ɪ",
+    "j": "ᴊ", "k": "ᴋ", "l": "ʟ",
+    "m": "ᴍ", "n": "ɴ", "o": "ᴏ",
+    "p": "ᴘ", "q": "ǫ", "r": "ʀ",
+    "s": "ꜱ", "t": "ᴛ", "u": "ᴜ",
+    "v": "ᴠ", "w": "ᴡ", "x": "x",
+    "y": "ʏ", "z": "ᴢ"
+})
 
 
-# =====================================
-# 16:9 LANDSCAPE IMAGE CONVERSION
-# =====================================
-
-async def create_16_9_image(image_url):
-
-    timeout = ClientTimeout(total=60)
-
-    async with ClientSession(timeout=timeout) as session:
-
-        async with session.get(image_url) as response:
-
-            response.raise_for_status()
-            image_data = await response.read()
-
-    original = Image.open(
-        io.BytesIO(image_data)
-    ).convert("RGB")
-
-    width = 1280
-    height = 720
-
-    # Landscape images fill the 16:9 frame.
-    # Portrait fallback images remain fully visible.
-    if original.width / original.height >= 1.65:
-
-        final_image = ImageOps.fit(
-            original,
-            (width, height),
-            method=Image.Resampling.LANCZOS
-        )
-
-    else:
-
-        background = ImageOps.fit(
-            original,
-            (width, height),
-            method=Image.Resampling.LANCZOS
-        )
-
-        background = background.filter(
-            ImageFilter.GaussianBlur(30)
-        )
-
-        dark_layer = Image.new(
-            "RGB",
-            (width, height),
-            (0, 0, 0)
-        )
-
-        background = Image.blend(
-            background,
-            dark_layer,
-            0.35
-        )
-
-        foreground = ImageOps.contain(
-            original,
-            (width, height),
-            method=Image.Resampling.LANCZOS
-        )
-
-        x = (width - foreground.width) // 2
-        y = (height - foreground.height) // 2
-
-        background.paste(
-            foreground,
-            (x, y)
-        )
-
-        final_image = background
-
-    output = io.BytesIO()
-
-    final_image.save(
-        output,
-        format="JPEG",
-        quality=90,
-        optimize=True
-    )
-
-    output.seek(0)
-
-    return output.getvalue()
+def small_caps(text):
+    return str(text).translate(SMALL_CAPS_MAP)
 
 
-# =====================================
-# MOVIE CAPTION
-# =====================================
+# ==========================================
+# CAPTION FORMATTER
+# ==========================================
 
-def build_movie_caption(movie, details, directors):
+def build_caption(movie, details, directors):
 
     title = (
         details.get("title")
         or movie.get("title")
-        or "Unknown"
+        or "UNKNOWN"
     )
 
     release_date = (
@@ -207,30 +97,34 @@ def build_movie_caption(movie, details, directors):
         or ""
     )
 
-    release_year = (
+    year = (
         release_date[:4]
-        if release_date
+        if len(release_date) >= 4
         else "N/A"
     )
 
-    rating = details.get("rating", "N/A")
+    rating = details.get("rating")
 
-    if isinstance(rating, (int, float)):
-        rating = f"{rating:.1f}/10"
+    if rating is None:
+        rating = movie.get("rating")
+
+    try:
+        rating_text = f"{float(rating):.1f}/10"
+    except (TypeError, ValueError):
+        rating_text = "N/A"
 
     genres = details.get("genres") or []
 
-    if isinstance(genres, list):
+    genre_names = [
+        genre.get("name", "")
+        for genre in genres
+        if genre.get("name")
+    ]
 
-        genre_text = ", ".join(
-            str(item.get("name", ""))
-            if isinstance(item, dict)
-            else str(item)
-            for item in genres
-        )
-
-    else:
-        genre_text = str(genres)
+    genre_text = (
+        ", ".join(genre_names)
+        if genre_names else "N/A"
+    )
 
     language = (
         details.get("language")
@@ -238,173 +132,160 @@ def build_movie_caption(movie, details, directors):
         or "N/A"
     )
 
+    language = language.upper()
+
+    director_text = (
+        ", ".join(directors)
+        if directors else "N/A"
+    )
+
     runtime = details.get("runtime")
 
-    runtime_text = (
-        f"{runtime} MIN"
-        if runtime
-        else "N/A"
-    )
-
-    if isinstance(directors, list):
-
-        director_text = ", ".join(
-            str(name) for name in directors
-        )
-
+    if runtime:
+        runtime_text = f"{runtime} MIN"
     else:
-        director_text = str(directors or "N/A")
+        runtime_text = "N/A"
 
     caption = (
-        f"🎬 RM MOVIES • EXCLUSIVE MOVIE DROP 🍿\n\n"
-        f"🎥 TITLE : {title} ({release_year})\n"
-        f"⭐ RATING : {rating}\n"
-        f"🎭 GENRES : {genre_text or 'N/A'}\n"
+        "🎬 RM MOVIES • EXCLUSIVE MOVIE DROP 🍿\n\n"
+
+        f"🎥 TITLE : {title} ({year})\n"
+
+        f"⭐ RATING : {rating_text}\n"
+
+        f"🎭 GENRES : {genre_text}\n"
+
         f"🌐 LANGUAGE : {language}\n"
-        f"📅 RELEASE : {release_year}\n"
+
+        f"📅 RELEASE : {year}\n"
+
         f"🎬 DIRECTOR : {director_text}\n"
+
         f"⏳ RUNTIME : {runtime_text}\n\n"
-        f"👑 POWERED BY @RudraMoviez"
+
+        "👑 POWERED BY "
     )
 
-    # Telegram photo caption limit
-    if len(caption) > 1000:
-        caption = caption[:997] + "..."
+    # Convert caption text to small caps.
+    # Keep username in normal ASCII.
+    caption = small_caps(caption)
 
-    return small_caps(caption)
+    caption += POWERED_BY
+
+    return caption
 
 
-# =====================================
-# TELEGRAM CHANNEL POST
-# =====================================
+# ==========================================
+# RESOLVE CHANNEL
+# ==========================================
 
-async def post_movie_to_channel(caption, image_url):
+async def get_target_chat(client):
 
     if not CHANNEL_ID:
-        raise ValueError("CHANNEL_ID is missing")
+        return None
 
-    if not image_url:
-        raise ValueError("Movie image not available")
+    channel = str(CHANNEL_ID).strip()
 
-    image_bytes = await create_16_9_image(
-        image_url
+    try:
+        if channel.lstrip("-").isdigit():
+            chat = await client.get_chat(int(channel))
+        else:
+            chat = await client.get_chat(channel)
+
+        return chat.id
+
+    except Exception:
+        logger.exception("CHANNEL RESOLUTION FAILED")
+        raise
+
+
+# ==========================================
+# HEALTH SERVER
+# ==========================================
+
+async def health(request):
+
+    return web.json_response({
+        "status": "online",
+        "bot": BOT_NAME
+    })
+
+
+async def start_health_server():
+
+    web_app = web.Application()
+
+    web_app.router.add_get("/", health)
+    web_app.router.add_get("/health", health)
+
+    runner = web.AppRunner(web_app)
+
+    await runner.setup()
+
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        int(PORT or 10000)
     )
 
-    form = FormData()
-
-    form.add_field(
-        "chat_id",
-        str(CHANNEL_ID)
-    )
-
-    form.add_field(
-        "photo",
-        image_bytes,
-        filename="rudra_landscape_16_9.jpg",
-        content_type="image/jpeg"
-    )
-
-    form.add_field(
-        "caption",
-        caption
-    )
-
-    form.add_field(
-        "show_caption_above_media",
-        "true"
-    )
-
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/sendPhoto"
-    )
-
-    timeout = ClientTimeout(total=90)
-
-    async with ClientSession(timeout=timeout) as session:
-
-        async with session.post(
-            url,
-            data=form
-        ) as response:
-
-            result = await response.json()
-
-            if not result.get("ok"):
-                raise RuntimeError(
-                    f"Telegram API Error: {result}"
-                )
+    await site.start()
 
     logger.info(
-        "ONE POST: Movie details + landscape image uploaded"
+        "HEALTH SERVER RUNNING ON PORT %s",
+        PORT or 10000
     )
 
+    while True:
+        await asyncio.sleep(3600)
 
-# =====================================
+
+def health_thread():
+
+    asyncio.run(start_health_server())
+
+
+def start_health():
+
+    thread = threading.Thread(
+        target=health_thread,
+        daemon=True
+    )
+
+    thread.start()
+
+
+# ==========================================
 # START COMMAND
-# =====================================
+# ==========================================
 
-@app.on_message(
-    filters.private & filters.command("start")
-)
+@app.on_message(filters.command("start") & filters.private)
 async def start_command(client, message):
 
     await message.reply_text(
         "👑 SURYA RUDRA MOVIES\n\n"
         "🎬 WELCOME!\n\n"
-        "🔎 SEND A MOVIE NAME.\n\n"
-        "📌 USE /credits FOR TMDB ATTRIBUTION."
+        "🔎 SEND A MOVIE NAME."
     )
 
 
-# =====================================
-# CREDITS COMMAND
-# =====================================
-
-@app.on_message(
-    filters.private & filters.command("credits")
-)
-async def credits_command(client, message):
-
-    await message.reply_text(
-        "TMDB ATTRIBUTION\n\n"
-        "This product uses the TMDB API "
-        "but is not endorsed or certified by TMDB.\n\n"
-        "Official logo and attribution guidelines:",
-        reply_markup=InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton(
-                    "TMDB LOGO & ATTRIBUTION",
-                    url="https://www.themoviedb.org/about/logos-attribution"
-                )
-            ]
-        ])
-    )
-
-
-# =====================================
-# MOVIE SEARCH
-# =====================================
+# ==========================================
+# MOVIE SEARCH HANDLER
+# ==========================================
 
 @app.on_message(
     filters.private
     & filters.text
-    & ~filters.command(["start", "credits"])
+    & ~filters.command(["start"])
 )
 async def movie_search(client, message):
 
-    user_id = (
-        message.from_user.id
-        if message.from_user
-        else 0
-    )
+    user_id = message.from_user.id
 
-    if OWNER_ID and int(OWNER_ID) != int(user_id):
-
+    # Optional owner restriction
+    if OWNER_ID and user_id != int(OWNER_ID):
         await message.reply_text(
-            "⛔ UNAUTHORIZED USER."
+            "⛔ YOU ARE NOT AUTHORIZED."
         )
-
         return
 
     movie_name = message.text.strip()
@@ -422,123 +303,124 @@ async def movie_search(client, message):
         movie = await search_movie(movie_name)
 
         if not movie:
-
             await status.edit_text(
                 "❌ MOVIE NOT FOUND. TRY ANOTHER NAME."
             )
-
             return
 
         movie_id = movie.get("id")
 
         if not movie_id:
-
             await status.edit_text(
                 "❌ MOVIE ID NOT FOUND."
             )
-
             return
 
-        # Get details
-        details = await get_movie_details(
-            movie_id
-        )
+        # Fetch details
+        details = await get_movie_details(movie_id)
 
         if not details:
-
             await status.edit_text(
                 "❌ MOVIE DETAILS NOT AVAILABLE."
             )
-
             return
 
-        # Director only
-        directors = await get_movie_director(
-            movie_id
-        )
+        # Director only. No cast.
+        directors = await get_movie_director(movie_id)
 
-        caption = build_movie_caption(
+        # Get landscape backdrop first.
+        image_url = get_movie_image_url(details)
+
+        # Fallback to search result image.
+        if not image_url:
+            image_url = get_movie_image_url(movie)
+
+        if not image_url:
+            await status.edit_text(
+                "❌ MOVIE IMAGE NOT AVAILABLE."
+            )
+            return
+
+        # Build caption
+        caption = build_caption(
             movie,
             details,
             directors
         )
 
-        # Prefer landscape backdrop
-        image_path = (
-            details.get("backdrop")
-            or movie.get("backdrop")
-        )
+        # Telegram photo caption limit is 1024 characters.
+        if len(caption) > 1000:
+            caption = caption[:990] + "..."
 
-        # Fallback to portrait poster
-        if not image_path:
+        # Resolve destination
+        target_chat = await get_target_chat(client)
 
-            image_path = (
-                details.get("poster")
-                or movie.get("poster")
-            )
+        if target_chat is None:
+            target_chat = message.chat.id
 
-        if not image_path:
-
-            await status.edit_text(
-                "❌ MOVIE IMAGE NOT AVAILABLE."
-            )
-
-            return
-
-        if str(image_path).startswith("https://"):
-
-            image_url = image_path
-
-        else:
-
-            image_url = get_poster_url(
-                image_path
-            )
-
-        if not image_url:
-
-            await status.edit_text(
-                "❌ IMAGE URL NOT AVAILABLE."
-            )
-
-            return
-
-        # One Telegram post
-        await post_movie_to_channel(
-            caption,
-            image_url
+        # ONE PHOTO + ONE CAPTION.
+        # Photo appears ABOVE the caption.
+        await client.send_photo(
+            chat_id=target_chat,
+            photo=image_url,
+            caption=caption,
+            parse_mode=ParseMode.DISABLED
         )
 
         await status.edit_text(
-            "✅ MOVIE POSTED SUCCESSFULLY!"
+            "✅ MOVIE POSTED SUCCESSFULLY."
         )
 
         logger.info(
-            "Movie posted: %s",
-            movie.get("title")
+            "MOVIE POSTED: %s",
+            details.get("title")
+        )
+
+    except PeerIdInvalid:
+
+        logger.exception("INVALID CHANNEL PEER")
+
+        await status.edit_text(
+            "❌ CHANNEL ACCESS ERROR.\n\n"
+            "ADD THE BOT AS CHANNEL ADMIN "
+            "AND CHECK CHANNEL ID."
+        )
+
+    except ChatWriteForbidden:
+
+        logger.exception("CHANNEL WRITE FORBIDDEN")
+
+        await status.edit_text(
+            "❌ BOT CANNOT POST IN THIS CHANNEL.\n"
+            "GIVE THE BOT POST MESSAGES PERMISSION."
+        )
+
+    except ChatAdminRequired:
+
+        logger.exception("BOT ADMIN REQUIRED")
+
+        await status.edit_text(
+            "❌ MAKE THE BOT AN ADMIN "
+            "WITH POST MESSAGES PERMISSION."
         )
 
     except Exception:
 
-        logger.exception(
-            "Movie posting failed"
-        )
+        logger.exception("MOVIE POSTING FAILED")
 
         await status.edit_text(
             "❌ MOVIE POSTING FAILED. CHECK RENDER LOGS."
         )
 
 
-# =====================================
+# ==========================================
 # MAIN
-# =====================================
+# ==========================================
 
 if __name__ == "__main__":
 
-    start_health_server()
+    logger.info("%s STARTING", BOT_NAME)
 
-    logger.info(
-        "Starting SURYA RUDRA MOVIES..."
-    )
+    start_health()
 
     app.run()
