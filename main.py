@@ -4,13 +4,7 @@ import io
 import logging
 import threading
 
-from aiohttp import (
-    web,
-    ClientSession,
-    ClientTimeout,
-    FormData
-)
-
+from aiohttp import web, ClientSession, ClientTimeout, FormData
 from PIL import Image, ImageOps, ImageFilter
 
 from pyrogram import Client, filters
@@ -31,7 +25,7 @@ from tmdb import (
     get_poster_url
 )
 
-from formatter import create_caption
+from formatter import small_caps
 
 
 # =====================================
@@ -40,7 +34,7 @@ from formatter import create_caption
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +43,7 @@ logger.info("SURYA RUDRA MOVIES STARTING")
 
 
 # =====================================
-# BOT
+# PYROGRAM BOT
 # =====================================
 
 app = Client(
@@ -91,7 +85,10 @@ def start_health_server():
 
         await site.start()
 
-        logger.info("Health server running on port %s", PORT)
+        logger.info(
+            "Health server running on port %s",
+            PORT
+        )
 
         while True:
             await asyncio.sleep(3600)
@@ -99,44 +96,16 @@ def start_health_server():
     def thread_target():
         asyncio.run(run_server())
 
-    threading.Thread(
+    thread = threading.Thread(
         target=thread_target,
         daemon=True
-    ).start()
-
-
-# =====================================
-# TELEGRAM API
-# =====================================
-
-async def telegram_api(method, data):
-
-    url = (
-        f"https://api.telegram.org/"
-        f"bot{BOT_TOKEN}/{method}"
     )
 
-    timeout = ClientTimeout(total=60)
-
-    async with ClientSession(timeout=timeout) as session:
-
-        async with session.post(
-            url,
-            json=data
-        ) as response:
-
-            result = await response.json()
-
-            if not result.get("ok"):
-                raise RuntimeError(
-                    f"Telegram API Error: {result}"
-                )
-
-            return result["result"]
+    thread.start()
 
 
 # =====================================
-# DOWNLOAD AND CONVERT POSTER
+# 16:9 POSTER CONVERSION
 # =====================================
 
 async def create_16_9_poster(poster_url):
@@ -158,7 +127,7 @@ async def create_16_9_poster(poster_url):
     width = 1280
     height = 720
 
-    # Landscape blurred background
+    # Create blurred landscape background
     background = ImageOps.fit(
         original,
         (width, height),
@@ -169,7 +138,7 @@ async def create_16_9_poster(poster_url):
         ImageFilter.GaussianBlur(30)
     )
 
-    # Slightly darken background
+    # Dark cinematic background
     dark_layer = Image.new(
         "RGB",
         (width, height),
@@ -212,33 +181,99 @@ async def create_16_9_poster(poster_url):
 
 
 # =====================================
-# POST MOVIE DETAILS
+# SMALL CAPS CAPTION
+# =====================================
+
+def build_movie_caption(movie, details, directors):
+
+    title = (
+        details.get("title")
+        or movie.get("title")
+        or "Unknown"
+    )
+
+    release_date = (
+        details.get("release_date")
+        or movie.get("release_date")
+        or ""
+    )
+
+    release_year = (
+        release_date[:4]
+        if release_date
+        else "N/A"
+    )
+
+    rating = details.get("rating", "N/A")
+
+    if isinstance(rating, (int, float)):
+        rating = f"{rating:.1f}/10"
+
+    genres = details.get("genres") or []
+
+    if isinstance(genres, list):
+        genre_text = ", ".join(
+            str(item.get("name", ""))
+            if isinstance(item, dict)
+            else str(item)
+            for item in genres
+        )
+    else:
+        genre_text = str(genres)
+
+    language = (
+        details.get("language")
+        or movie.get("language")
+        or "N/A"
+    )
+
+    runtime = details.get("runtime")
+
+    runtime_text = (
+        f"{runtime} MIN"
+        if runtime
+        else "N/A"
+    )
+
+    if isinstance(directors, list):
+        director_text = ", ".join(
+            str(name) for name in directors
+        )
+    else:
+        director_text = str(directors or "N/A")
+
+    caption = (
+        f"🎬 RM MOVIES • EXCLUSIVE MOVIE DROP 🍿\n\n"
+        f"🎥 TITLE : {title} ({release_year})\n"
+        f"⭐ RATING : {rating}\n"
+        f"🎭 GENRES : {genre_text or 'N/A'}\n"
+        f"🌐 LANGUAGE : {language}\n"
+        f"📅 RELEASE : {release_year}\n"
+        f"🎬 DIRECTOR : {director_text}\n"
+        f"⏳ RUNTIME : {runtime_text}\n\n"
+        f"👑 POWERED BY @RudraMoviez\n\n"
+        f"📌 DATA & IMAGES: TMDB"
+    )
+
+    # Telegram photo caption limit is 1024 characters.
+    caption = caption[:1000]
+
+    return small_caps(caption)
+
+
+# =====================================
+# TELEGRAM CHANNEL POST
 # =====================================
 
 async def post_movie_to_channel(caption, poster_url):
 
     if not CHANNEL_ID:
-        raise ValueError(
-            "CHANNEL_ID is missing"
-        )
+        raise ValueError("CHANNEL_ID is missing")
 
-    # FIRST: Text message
-    await telegram_api(
-        "sendMessage",
-        {
-            "chat_id": CHANNEL_ID,
-            "text": caption,
-            "disable_web_page_preview": True
-        }
-    )
-
-    logger.info("Movie details posted")
-
-    # SECOND: 16:9 photo attachment
     if not poster_url:
-        logger.warning("Poster not available")
-        return
+        raise ValueError("Movie poster not available")
 
+    # Convert poster to 16:9
     poster_bytes = await create_16_9_poster(
         poster_url
     )
@@ -255,6 +290,16 @@ async def post_movie_to_channel(caption, poster_url):
         poster_bytes,
         filename="rudra_poster_16_9.jpg",
         content_type="image/jpeg"
+    )
+
+    form.add_field(
+        "caption",
+        caption
+    )
+
+    form.add_field(
+        "show_caption_above_media",
+        "true"
     )
 
     url = (
@@ -275,10 +320,12 @@ async def post_movie_to_channel(caption, poster_url):
 
             if not result.get("ok"):
                 raise RuntimeError(
-                    f"Poster Upload Error: {result}"
+                    f"Telegram API Error: {result}"
                 )
 
-    logger.info("16:9 Poster attachment uploaded")
+    logger.info(
+        "Movie details and 16:9 poster posted as ONE message"
+    )
 
 
 # =====================================
@@ -334,13 +381,13 @@ async def movie_search(client, message):
 
     try:
 
-        # Search TMDB
+        # Search movie
         movie = await search_movie(movie_name)
 
         if not movie:
 
             await status.edit_text(
-                "❌ MOVIE NOT FOUND."
+                "❌ MOVIE NOT FOUND. TRY ANOTHER NAME."
             )
 
             return
@@ -355,7 +402,7 @@ async def movie_search(client, message):
 
             return
 
-        # Movie details
+        # Fetch movie details
         details = await get_movie_details(
             movie_id
         )
@@ -368,39 +415,51 @@ async def movie_search(client, message):
 
             return
 
-        # Director only
+        # Director only. No cast or story.
         directors = await get_movie_director(
             movie_id
         )
 
-        # Create caption
-        caption = create_caption(
+        # Build compact caption
+        caption = build_movie_caption(
             movie,
             details,
             directors
         )
 
-        # Poster URL
+        # Get poster path
         poster_path = (
             details.get("poster")
             or movie.get("poster")
         )
 
-        poster_url = None
+        if not poster_path:
 
-        if poster_path:
+            await status.edit_text(
+                "❌ POSTER NOT AVAILABLE."
+            )
 
-            if str(poster_path).startswith("https://"):
+            return
 
-                poster_url = poster_path
+        if str(poster_path).startswith("https://"):
 
-            else:
+            poster_url = poster_path
 
-                poster_url = get_poster_url(
-                    poster_path
-                )
+        else:
 
-        # Post details and poster
+            poster_url = get_poster_url(
+                poster_path
+            )
+
+        if not poster_url:
+
+            await status.edit_text(
+                "❌ POSTER URL NOT AVAILABLE."
+            )
+
+            return
+
+        # Send one message with caption above photo
         await post_movie_to_channel(
             caption,
             poster_url
@@ -422,7 +481,7 @@ async def movie_search(client, message):
         )
 
         await status.edit_text(
-            "❌ MOVIE POSTING FAILED. CHECK LOGS."
+            "❌ MOVIE POSTING FAILED. CHECK RENDER LOGS."
         )
 
 
